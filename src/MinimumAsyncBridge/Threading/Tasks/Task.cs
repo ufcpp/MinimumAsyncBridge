@@ -450,5 +450,90 @@ namespace System.Threading.Tasks
 
             return tcs0.Task;
         }
+
+        IDisposable _d;
+        public Task() { _d = ObjectStackTraceCounter.CountUp(this); }
+        ~Task() { _d.Dispose(); }
+    }
+
+    public class ObjectStackTraceCounter
+    {
+        private static Dictionary<int, string> _stacktraces = new Dictionary<int, string>();
+        private static Dictionary<int, int> _counts = new Dictionary<int, int>();
+
+        /// <summary>
+        /// ハッシュ値をキーにして情報記録してるので、そのハッシュ値に対応するスタックトレースを取り出す。
+        /// </summary>
+        /// <param name="hashCode"></param>
+        /// <returns></returns>
+        public static string GetStackTrace(int hashCode)
+        {
+            lock (_counts)
+            {
+                string s;
+                return _stacktraces.TryGetValue(hashCode, out s) ? s : null;
+            }
+        }
+
+        /// <summary>
+        /// 現在生きているオブジェクトの個数。
+        /// キーがスタックトレースのハッシュ値。
+        /// 値が個数。
+        /// </summary>
+        public static IEnumerable<KeyValuePair<int, int>> GetObjects()
+        {
+            lock (_counts)
+                return _counts.Where(x => x.Value != 0).ToArray();
+        }
+
+        /// <summary>
+        /// コンストラクターで呼ぶ。
+        /// </summary>
+        /// <param name="x"></param>
+        /// <returns>デストラクターで <see cref="IDisposable.Dispose"/> を呼ぶ。</returns>
+        public static IDisposable CountUp(object x)
+        {
+            var st = new Diagnostics.StackTrace().ToString();
+            var key = st.GetHashCode();
+
+            lock (_counts)
+            {
+                if (!_stacktraces.ContainsKey(key))
+                    _stacktraces[key] = st;
+
+                int count;
+                _counts.TryGetValue(key, out count);
+                count++;
+                _counts[key] = count;
+            }
+
+            return new Disposer(key);
+        }
+
+        struct Disposer : IDisposable
+        {
+            int _key;
+            public Disposer(int key) { _key = key; }
+            public void Dispose() => CountDown(_key);
+        }
+
+        /// <summary>
+        /// デストラクターで呼ぶ。
+        /// </summary>
+        /// <param name="x"></param>
+        private static void CountDown(int key)
+        {
+            lock (_counts)
+            {
+                int count;
+                _counts.TryGetValue(key, out count);
+                count--;
+
+                if (count == 0)
+                    _counts.Remove(key);
+                else
+                    _counts[key] = count;
+            }
+        }
     }
 }
